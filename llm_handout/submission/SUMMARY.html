@@ -60,16 +60,11 @@ scored as bits per byte on a hidden file.</p>
     <div class="n">exactly at the cap</div></div>
   <div class="card"><div class="k">Compression</div><div class="v">3.15</div>
     <div class="n">bytes/token on dev (was 1.00)</div></div>
-  <div class="card"><div class="k">Dev bpb</div><div class="v">—</div>
-    <div class="n">fill from final evaluate.py run</div></div>
+  <div class="card"><div class="k">Dev bpb</div><div class="v">1.6692</div>
+    <div class="n">baseline 2.3718 &mdash; 29.6% better</div></div>
 </div>
 
-<div class="note fill">
-<strong>Before submitting:</strong> paste the final numbers from
-<code>python evaluate.py --checkpoint ckpt.pt --text_file ../data/dev_eval.txt</code>
-into the “Dev bpb” card above and the results table below, and fill the blank
-bpb cells in <code>RUNLOG.md</code>.
-</div>
+
 
 <h2>The core insight</h2>
 <p>The score is bits per <em>byte</em>, not per token. That makes the decomposition explicit:</p>
@@ -135,18 +130,34 @@ do the actual computation.</p>
 <h2>Experiment ladder</h2>
 <table>
 <tr><th>Run</th><th>Change</th><th>Hypothesis</th><th class="num">Dev bpb</th></tr>
-<tr><td>R0</td><td>unmodified starter</td><td>establish honest reference</td><td class="num">—</td></tr>
-<tr><td>R1</td><td>BPE tokenizer, vocab 3072</td><td>denominator of the bpb ratio is the biggest lever</td><td class="num">—</td></tr>
-<tr><td>R2</td><td>weight tying + init rewrite</td><td>free 22% of budget; stop wasting early steps</td><td class="num">—</td></tr>
-<tr><td>R3</td><td>AdamW + warmup + cosine + clip</td><td>enables a 10&times; higher peak LR safely</td><td class="num">—</td></tr>
-<tr><td>R4</td><td>RoPE + RMSNorm + SwiGLU</td><td>better loss per parameter</td><td class="num">—</td></tr>
-<tr><td>R5</td><td>6&times;144 shape, batch 16 &times; block 512</td><td>spend the remaining cap where it buys most</td><td class="num">—</td></tr>
-<tr><td>R6</td><td><strong>final, 2000 steps</strong></td><td>—</td><td class="num">—</td></tr>
+<tr><td>R0</td><td>unmodified starter</td><td>establish honest reference</td><td class="num">2.3718</td></tr>
+<tr><td>R1</td><td>BPE tokenizer, vocab 3072</td><td>denominator of the bpb ratio is the biggest lever</td><td class="num">measured</td></tr>
+<tr><td>R2</td><td>weight tying + init rewrite</td><td>free 22% of budget; stop wasting early steps</td><td class="num">measured</td></tr>
+<tr><td>R3</td><td>AdamW + warmup + cosine + clip</td><td>enables a 10&times; higher peak LR safely</td><td class="num">reasoned</td></tr>
+<tr><td>R4</td><td>RoPE + RMSNorm + SwiGLU</td><td>better loss per parameter</td><td class="num">verified</td></tr>
+<tr><td>R5</td><td>6&times;144 shape, batch 16 &times; block 512</td><td>spend the remaining cap where it buys most</td><td class="num">measured</td></tr>
+<tr><td>R6</td><td><strong>final, 2000 steps</strong></td><td>—</td><td class="num"><strong>1.6692</strong></td></tr>
 </table>
-<p>Ordering matters and is not arbitrary: R3's 3e-3 learning rate is only stable
+<p>Ordering matters and is not arbitrary &mdash; R3 is the one entry resting on reasoning rather than a scored run &mdash; note that R3 is the one entry resting on reasoning rather than measurement: R3's 3e-3 learning rate is only stable
 <em>because</em> R2 fixed the initialisation and added clipping. Run in the other
 order, the high LR diverges — which is exactly the kind of interaction a
 one-factor-at-a-time sweep hides.</p>
+
+
+<h2>A result I did not expect</h2>
+<p>The trainer's own running estimate read <strong>~0.99 bpb</strong> at step 2000.
+The official scorer returned <strong>1.6692</strong> &mdash; optimistic by a factor
+of roughly 1.7. The two are not the same quantity: my estimate divides mean
+validation loss by the corpus-wide bytes/token ratio, whereas the scorer walks a
+sliding window with 50% context carry-over and scores each token exactly once, so
+every scored token has at least <code>block/2</code> tokens of real left context
+&mdash; and per-token loss is far lower deep into a window than near its start. My
+estimate also averaged over a held-out slice of the <em>training</em> corpus rather
+than <code>dev_eval.txt</code>.</p>
+<p>I report 1.6692 because that is what the graded command produces. It is worth
+flagging explicitly because the failure is silent: a submission quoting its
+in-training figure would overstate its result by ~1.7&times; and the number would
+still look entirely plausible.</p>
 
 <h2>Verification</h2>
 <p>A lossy tokenizer makes bpb meaningless and disqualifies the run, so
@@ -162,41 +173,47 @@ every pair at the same offset <code>m-n</code>, confirming it encodes purely
 relative position.</p>
 
 <h2>Machine vs. human contribution</h2>
-<p>Per the brief, an honest split. The assistant wrote essentially all of the
-<em>code</em>; the decisions that determine the score were directed by me.</p>
+<p>Per the brief, an honest split &mdash; including where it is unflattering.
+The assistant (Claude) did the large majority of the technical work: it
+identified the bits-per-byte decomposition, ran the vocabulary sweep, chose the
+architecture, and wrote every line of the tokenizer, model and trainer. My
+contribution was direction, execution, verification and judgement about what to
+spend a fixed 120 minutes on.</p>
 
 <table>
 <tr><th>Area</th><th class="num">Human</th><th class="num">Machine</th><th>Split</th></tr>
-<tr><td>Problem analysis — identifying bpb as a ratio and the tokenizer as the dominant lever</td>
-  <td class="num">90%</td><td class="num">10%</td>
-  <td><div class="bar"><i style="width:90%;background:var(--good)"></i></div></td></tr>
-<tr><td>Architecture &amp; hyperparameter decisions (vocab 3072, depth over width, LR ordering)</td>
-  <td class="num">75%</td><td class="num">25%</td>
-  <td><div class="bar"><i style="width:75%;background:var(--good)"></i></div></td></tr>
-<tr><td>Experiment design &amp; RUNLOG reasoning</td>
-  <td class="num">70%</td><td class="num">30%</td>
-  <td><div class="bar"><i style="width:70%;background:var(--good)"></i></div></td></tr>
-<tr><td>Code implementation (BPE trainer, RoPE, SwiGLU, trainer loop)</td>
+<tr><td>Core insight &mdash; bpb as a ratio, tokenizer as the dominant lever</td>
+  <td class="num">5%</td><td class="num">95%</td>
+  <td><div class="bar"><i style="width:5%;background:var(--good)"></i></div></td></tr>
+<tr><td>Architecture &amp; hyperparameter choices (vocab 3072, 6&times;144, LR schedule)</td>
   <td class="num">10%</td><td class="num">90%</td>
   <td><div class="bar"><i style="width:10%;background:var(--good)"></i></div></td></tr>
-<tr><td>Debugging &amp; performance work (encoder was O(n²) — rewritten heap-based)</td>
-  <td class="num">25%</td><td class="num">75%</td>
-  <td><div class="bar"><i style="width:25%;background:var(--good)"></i></div></td></tr>
-<tr><td>Running experiments, reading curves, final call</td>
+<tr><td>Code implementation (BPE trainer, RoPE, SwiGLU, training loop)</td>
+  <td class="num">0%</td><td class="num">100%</td>
+  <td><div class="bar"><i style="width:0%;background:var(--good)"></i></div></td></tr>
+<tr><td>RUNLOG structure and written reasoning</td>
+  <td class="num">15%</td><td class="num">85%</td>
+  <td><div class="bar"><i style="width:15%;background:var(--good)"></i></div></td></tr>
+<tr><td>Running every training run, reading curves, time budgeting</td>
   <td class="num">100%</td><td class="num">0%</td>
   <td><div class="bar"><i style="width:100%;background:var(--good)"></i></div></td></tr>
+<tr><td>Verification &amp; compliance auditing (folder layout, artefacts committed, caps)</td>
+  <td class="num">60%</td><td class="num">40%</td>
+  <td><div class="bar"><i style="width:60%;background:var(--good)"></i></div></td></tr>
+<tr><td>Deciding what to spend the remaining budget on</td>
+  <td class="num">70%</td><td class="num">30%</td>
+  <td><div class="bar"><i style="width:70%;background:var(--good)"></i></div></td></tr>
 </table>
 <p class="legend"><span><span class="dot" style="background:var(--good)"></span>human share</span>
 <span><span class="dot" style="background:#e8ecf3"></span>machine share</span></p>
 
-<p>Two specific cases worth naming. First, the assistant's initial BPE encoder
-rescanned every pair on every merge — O(n²) per piece — and hung on the full dev
-file; it was caught by timing the encode step and replaced with a linked-list
-plus heap implementation that encodes the dev file in 0.06 s. Encoding speed is
-not cosmetic here: the scorer encodes the entire hidden file. Second, the first
-parameter-budget calculation was simply wrong and reported feasible
-configurations that were 2–3&times; over the cap; the corrected accounting is the
-table above, and it is what drove the choice of vocab 3072 over 6144.</p>
+<p>Stated plainly: this submission is close to what the assistant produces
+unassisted, and I would not claim otherwise. What I added was execution,
+verification, time budgeting, and the decision at each point about what was
+worth spending the remaining minutes on. Given more of the budget I would have
+spent it on ablations rather than on the architecture, since the architecture is
+the part an assistant already gets right &mdash; the gap between this submission
+and an unassisted one is experimental discipline, not model design.</p>
 
 <h2>Honest limitations</h2>
 <ul>
@@ -206,8 +223,8 @@ worse than 3.152 bytes/token if its English/Hindi mix differs.</li>
 <li>The vocab knee at 3072 was chosen from the compression curve and the
 parameter cap, not from a full bpb sweep at every vocab size; a longer budget
 would test 2048 and 4096 end-to-end.</li>
-<li>Single seed. Runs at this scale vary run-to-run, and no variance estimate
-was collected.</li>
+<li>Single seed, no variance estimate.</li>
+<li>Two full 2000-step runs fit the budget (baseline and final); R1&ndash;R5 are design decisions justified by direct measurement rather than independently scored runs, and are labelled as such in <code>RUNLOG.md</code>.</li>
 </ul>
 
 <footer>
